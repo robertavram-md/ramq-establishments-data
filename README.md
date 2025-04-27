@@ -1,54 +1,61 @@
 # RAMQ Establishments Data
 
-This repository contains scripts and data for extracting and enriching healthcare establishment information from the Régie de l'assurance maladie du Québec (RAMQ) with Google Places API data.
+This repository contains essential scripts for extracting healthcare establishment information from the Régie de l'assurance maladie du Québec (RAMQ) PDFs and enriching it with Google Places API data.
 
 ## Project Overview
 
 The goal of this project is to:
-1. Extract healthcare establishment data (hospitals, clinics, etc.) from the RAMQ website
+1. Extract healthcare establishment data (hospitals, clinics, etc.) from RAMQ PDF files
 2. Enrich this data with additional information from Google Places API
 3. Create a comprehensive CSV file with combined data
 
 ## Repository Structure
 
-- **scripts/**: Contains all Python scripts used for data extraction and processing
+- **scripts/**: Contains the essential Python scripts for data extraction and processing
 - **data/**: Contains the CSV files with RAMQ establishments data
 
-## Key Files
+## Essential Scripts
 
-### Scripts
+This repository has been streamlined to include only the most useful scripts:
 
-- `extract_pdf_final.py`: Extracts establishment data from RAMQ PDF files
-- `enrich_with_google_places_improved.py`: Enriches RAMQ data with Google Places API information
-- `create_merged_csv.py`: Merges original RAMQ data with Google Places enriched data
+1. **extract_ramq_pdf.py**: Extracts establishment data from RAMQ PDF files
+   - Downloads PDF files for all regions of Quebec
+   - Extracts establishment codes, names, addresses, and categories
+   - Creates a comprehensive CSV with all establishments
 
-### Data
+2. **enrich_with_google_places.py**: Enriches RAMQ data with Google Places API
+   - Searches for each establishment using the Google Places API
+   - Retrieves detailed information (Place ID, address, phone, coordinates, etc.)
+   - Includes advanced rate limiting handling with exponential backoff
+   - Processes establishments in small batches to avoid API limits
 
-- `ramq_establishments_final.csv`: Original RAMQ establishments data
-- `ramq_establishments_merged_improved.csv`: RAMQ data enriched with Google Places information
-- `ramq_establishments_merged_complete.csv`: Complete merged dataset with more establishments
+3. **merge_data.py**: Merges original RAMQ data with Google Places data
+   - Combines data from both sources into a single comprehensive CSV
+   - Preserves all original RAMQ information
+   - Adds Google Places data where matches are found
 
 ## How to Use
 
-### Data Extraction
-
-To extract data from RAMQ PDF files:
+### Step 1: Extract RAMQ Data
 
 ```python
-python scripts/extract_pdf_final.py
+python scripts/extract_ramq_pdf.py
 ```
 
-This script downloads PDF files for all regions of Quebec from the RAMQ website and extracts establishment codes, names, addresses, and categories.
+This will create `ramq_establishments_final.csv` with the following fields:
+- Region
+- Code (5-digit identifier)
+- Name
+- Address
+- Categories of care units
 
-### Google Places Enrichment
-
-To enrich the data with Google Places API:
+### Step 2: Enrich with Google Places API
 
 ```python
-python scripts/enrich_with_google_places_improved.py
+python scripts/enrich_with_google_places.py
 ```
 
-This script uses the Google Places API to search for each establishment and retrieve additional information such as:
+This will create `ramq_establishments_enriched_complete.csv` with Google Places data including:
 - Google Place ID
 - Formatted address
 - Phone numbers
@@ -56,21 +63,15 @@ This script uses the Google Places API to search for each establishment and retr
 - Website URLs
 - Place types
 
-The script includes rate limiting handling with exponential backoff to avoid hitting API limits.
-
-### Merging Data
-
-To merge the original RAMQ data with Google Places data:
+### Step 3: Merge the Data
 
 ```python
-python scripts/create_merged_csv.py
+python scripts/merge_data.py
 ```
 
-This creates a comprehensive CSV file that preserves all original RAMQ information while adding the Google Places data where available.
+This will create `ramq_establishments_merged_complete.csv` that combines all data from both sources.
 
-## Data Fields
-
-The final merged CSV contains the following fields:
+## Data Fields in Final CSV
 
 - **region**: Geographic region in Quebec
 - **code**: RAMQ 5-digit establishment code
@@ -97,7 +98,6 @@ The final merged CSV contains the following fields:
 - Python 3.6+
 - Required packages:
   - requests
-  - beautifulsoup4
   - poppler-utils (for PDF processing)
 
 ## License
