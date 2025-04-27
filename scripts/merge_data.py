@@ -2,9 +2,9 @@ import csv
 import os
 
 # Input and output file paths
-original_csv_path = "/home/ubuntu/ramq_data/ramq_establishments_final.csv"
-enriched_csv_path = "/home/ubuntu/ramq_data/ramq_establishments_enriched_temp.csv"
-merged_csv_path = "/home/ubuntu/ramq_data/ramq_establishments_merged_improved.csv"
+original_csv_path = "data/ramq_establishments_final.csv"
+enriched_csv_path = "data/ramq_establishments_enriched_temp.csv"
+merged_csv_path = "data/ramq_establishments_merged_improved.csv"
 
 def merge_csv_files():
     print(f"Starting to merge CSV files...")
@@ -15,10 +15,10 @@ def merge_csv_files():
         reader = csv.DictReader(file)
         original_fieldnames = reader.fieldnames
         
-        # Store original data by code (unique identifier in original data)
+        # Store original data by id (unique identifier in original data)
         for row in reader:
-            code = row['code']
-            original_data[code] = row
+            ramq_id = row['code']  # Using code as ramq_id
+            original_data[ramq_id] = row
     
     print(f"Read {len(original_data)} establishments from original CSV")
     
@@ -28,18 +28,17 @@ def merge_csv_files():
         reader = csv.DictReader(file)
         enriched_fieldnames = reader.fieldnames
         
-        # Create a mapping from Google Places name to enriched data
-        # We'll use this to match with original data
+        # Create a mapping from ramq_id to enriched data
         for row in reader:
-            name = row['name']
-            enriched_data[name] = row
+            ramq_id = row['ramq_id']
+            enriched_data[ramq_id] = row
     
     print(f"Read {len(enriched_data)} establishments from enriched CSV")
     
     # Define the merged CSV structure
     merged_fieldnames = original_fieldnames + [
         field for field in enriched_fieldnames 
-        if field not in original_fieldnames and field != 'name'  # Skip duplicate name field
+        if field not in original_fieldnames and field not in ['ramq_id', 'google_place_name', 'id']  # Skip duplicate fields
     ]
     
     # Create the merged CSV
@@ -49,49 +48,27 @@ def merge_csv_files():
         
         # Process each establishment in the original data
         merged_count = 0
-        for code, original_row in original_data.items():
+        for ramq_id, original_row in original_data.items():
             merged_row = original_row.copy()
             
-            # Try to find a match in the enriched data
-            original_name = original_row['name']
-            
-            # Look for exact match first
-            if original_name in enriched_data:
-                enriched_row = enriched_data[original_name]
+            # Try to find a match in the enriched data using ramq_id
+            if ramq_id in enriched_data:
+                enriched_row = enriched_data[ramq_id]
                 
                 # Add enriched fields to merged row
                 for field in enriched_fieldnames:
-                    if field not in original_fieldnames and field != 'name':
+                    if field not in original_fieldnames and field not in ['ramq_id', 'google_place_name', 'id']:
                         merged_row[field] = enriched_row[field]
                 
+                # Add google_place_name and place_id as new fields
+                merged_row['google_place_name'] = enriched_row['google_place_name']
+                merged_row['google_place_id'] = enriched_row['id']  # Store Google place_id as google_place_id
                 merged_count += 1
             else:
-                # If no exact match, try to find a partial match
-                best_match = None
-                best_score = 0
-                
-                for enriched_name, enriched_row in enriched_data.items():
-                    # Simple matching score based on common words
-                    original_words = set(original_name.upper().split())
-                    enriched_words = set(enriched_name.upper().split())
-                    common_words = original_words.intersection(enriched_words)
-                    
-                    if len(common_words) > best_score and len(common_words) >= 2:
-                        best_score = len(common_words)
-                        best_match = enriched_row
-                
-                if best_match:
-                    # Add enriched fields to merged row
-                    for field in enriched_fieldnames:
-                        if field not in original_fieldnames and field != 'name':
-                            merged_row[field] = best_match[field]
-                    
-                    merged_count += 1
-                else:
-                    # No match found, add empty values for enriched fields
-                    for field in enriched_fieldnames:
-                        if field not in original_fieldnames and field != 'name':
-                            merged_row[field] = ""
+                # No match found, add empty values for enriched fields
+                for field in enriched_fieldnames:
+                    if field not in original_fieldnames and field not in ['ramq_id', 'id']:
+                        merged_row[field] = ""
             
             # Write the merged row
             writer.writerow(merged_row)

@@ -9,14 +9,14 @@ import random
 API_KEY = "AIzaSyAo9nxP1rpIdP5UBPKftAxhjsiZCLGcdyM"
 
 # Input and output file paths
-input_csv_path = "/home/ubuntu/ramq_data/ramq_establishments_final.csv"
-output_csv_path = "/home/ubuntu/ramq_data/ramq_establishments_enriched_complete.csv"
-temp_output_path = "/home/ubuntu/ramq_data/ramq_establishments_enriched_temp.csv"
-progress_log_path = "/home/ubuntu/ramq_data/enrichment_progress.log"
+input_csv_path = "data/ramq_establishments_final.csv"
+output_csv_path = "data/ramq_establishments_enriched_complete.csv"
+temp_output_path = "data/ramq_establishments_enriched_temp.csv"
+progress_log_path = "data/enrichment_progress.log"
 
 # Define the output CSV structure
 output_fieldnames = [
-    "id", "admin_user_id", "name", "address", "locality", "country",
+    "ramq_id", "id", "google_place_name", "address", "locality", "country",
     "administrative_area_level_1", "administrative_area_level_2",
     "international_phone_number", "fax_number", "type", "website",
     "latitude", "longitude", "added_time", "place_type", "is_fax_enabled"
@@ -147,28 +147,47 @@ def extract_address_components(components):
 
 # Function to process a small batch of establishments
 def process_batch(establishments, start_idx, batch_size, current_timestamp):
-    results = []
+    batch_results = []
+    processed_count = 0
     
     for i in range(start_idx, min(start_idx + batch_size, len(establishments))):
         establishment = establishments[i]
-        
-        # Extract establishment data
+        ramq_id = establishment['code']  # Get the RAMQ ID from 'code' field
         name = establishment["name"]
         address = establishment["address"]
         region = establishment["region"]
         
-        # Skip if no address
         if not address:
             log_progress(f"Skipping {name} - No address available")
+            # Create empty row for establishments without address
+            output_row = {
+                "ramq_id": ramq_id,
+                "id": "",
+                "google_place_name": "",
+                "address": "",
+                "locality": "",
+                "country": "",
+                "administrative_area_level_1": "",
+                "administrative_area_level_2": "",
+                "international_phone_number": "",
+                "fax_number": "",
+                "type": "",
+                "website": "",
+                "latitude": "",
+                "longitude": "",
+                "added_time": current_timestamp,
+                "place_type": "",
+                "is_fax_enabled": "0"
+            }
+            batch_results.append(output_row)
+            log_progress(f"Added empty data for: {name} ({i+1}/{len(establishments)})")
             continue
         
         # Search for place
         place = search_place(name, address, region)
         
-        if place:
+        if place and place.get("place_id"):
             place_id = place.get("place_id")
-            
-            # Get place details
             details = get_place_details(place_id)
             
             if details:
@@ -178,51 +197,80 @@ def process_batch(establishments, start_idx, batch_size, current_timestamp):
                 # Determine place type
                 place_type = determine_place_type(details.get("types", []), name)
                 
-                # Extract phone and fax
-                phone = details.get("international_phone_number", "")
-                fax = ""  # Fax is not available in Google Places API
-                
-                # Check if fax is enabled
-                is_fax_enabled = "1" if fax else "0"
-                
-                # Extract coordinates
-                location = details.get("geometry", {}).get("location", {})
-                latitude = location.get("lat", "")
-                longitude = location.get("lng", "")
-                
                 # Create output row
                 output_row = {
+                    "ramq_id": ramq_id,
                     "id": place_id,
-                    "admin_user_id": "",
-                    "name": details.get("name", name),
-                    "address": details.get("formatted_address", address),
-                    "locality": address_components["locality"],
-                    "country": address_components["country"],
-                    "administrative_area_level_1": address_components["administrative_area_level_1"],
-                    "administrative_area_level_2": address_components["administrative_area_level_2"],
-                    "international_phone_number": phone,
-                    "fax_number": fax,
+                    "google_place_name": details.get('name', ''),
+                    "address": details.get("formatted_address", ""),
+                    "locality": address_components.get("locality", ""),
+                    "country": address_components.get("country", ""),
+                    "administrative_area_level_1": address_components.get("administrative_area_level_1", ""),
+                    "administrative_area_level_2": address_components.get("administrative_area_level_2", ""),
+                    "international_phone_number": details.get("international_phone_number", ""),
+                    "fax_number": "",
                     "type": place_type,
                     "website": details.get("website", ""),
-                    "latitude": latitude,
-                    "longitude": longitude,
+                    "latitude": details.get("geometry", {}).get("location", {}).get("lat", ""),
+                    "longitude": details.get("geometry", {}).get("location", {}).get("lng", ""),
                     "added_time": current_timestamp,
                     "place_type": place_type,
-                    "is_fax_enabled": is_fax_enabled
+                    "is_fax_enabled": "0"
                 }
-                
-                results.append(output_row)
+                batch_results.append(output_row)
                 log_progress(f"Successfully processed: {name} ({i+1}/{len(establishments)})")
-                
-                # Add a variable delay to avoid hitting API rate limits
-                delay = random.uniform(0.5, 1.5)
-                time.sleep(delay)
             else:
-                log_progress(f"Could not get details for {name}")
+                # Create empty row if no details found
+                output_row = {
+                    "ramq_id": ramq_id,
+                    "id": "",
+                    "google_place_name": "",
+                    "address": "",
+                    "locality": "",
+                    "country": "",
+                    "administrative_area_level_1": "",
+                    "administrative_area_level_2": "",
+                    "international_phone_number": "",
+                    "fax_number": "",
+                    "type": "",
+                    "website": "",
+                    "latitude": "",
+                    "longitude": "",
+                    "added_time": current_timestamp,
+                    "place_type": "",
+                    "is_fax_enabled": "0"
+                }
+                batch_results.append(output_row)
+                log_progress(f"No details found for: {name} ({i+1}/{len(establishments)})")
         else:
-            log_progress(f"Could not find place for {name}")
+            # Create empty row if place not found
+            output_row = {
+                "ramq_id": ramq_id,
+                "id": "",
+                "google_place_name": "",
+                "address": "",
+                "locality": "",
+                "country": "",
+                "administrative_area_level_1": "",
+                "administrative_area_level_2": "",
+                "international_phone_number": "",
+                "fax_number": "",
+                "type": "",
+                "website": "",
+                "latitude": "",
+                "longitude": "",
+                "added_time": current_timestamp,
+                "place_type": "",
+                "is_fax_enabled": "0"
+            }
+            batch_results.append(output_row)
+            log_progress(f"Place not found for: {name} ({i+1}/{len(establishments)})")
+        
+        # Add a variable delay to avoid hitting API rate limits
+        delay = random.uniform(1.0, 2.0)
+        time.sleep(delay)
     
-    return results
+    return batch_results
 
 # Function to process establishments with resume capability
 def process_establishments(batch_size=3, max_batches=None, start_from=None):
@@ -317,7 +365,7 @@ def merge_csv_files(original_csv_path, enriched_csv_path, merged_csv_path):
         # Create a mapping from Google Places name to enriched data
         # We'll use this to match with original data
         for row in reader:
-            name = row['name']
+            name = row['google_place_name']
             enriched_data[name] = row
     
     log_progress(f"Read {len(enriched_data)} establishments from enriched CSV")
@@ -325,7 +373,7 @@ def merge_csv_files(original_csv_path, enriched_csv_path, merged_csv_path):
     # Define the merged CSV structure
     merged_fieldnames = original_fieldnames + [
         field for field in enriched_fieldnames 
-        if field not in original_fieldnames and field != 'name'  # Skip duplicate name field
+        if field not in original_fieldnames and field != 'google_place_name'  # Skip duplicate name field
     ]
     
     # Create the merged CSV
@@ -347,7 +395,7 @@ def merge_csv_files(original_csv_path, enriched_csv_path, merged_csv_path):
                 
                 # Add enriched fields to merged row
                 for field in enriched_fieldnames:
-                    if field not in original_fieldnames and field != 'name':
+                    if field not in original_fieldnames and field != 'google_place_name':
                         merged_row[field] = enriched_row[field]
                 
                 merged_count += 1
@@ -369,14 +417,14 @@ def merge_csv_files(original_csv_path, enriched_csv_path, merged_csv_path):
                 if best_match:
                     # Add enriched fields to merged row
                     for field in enriched_fieldnames:
-                        if field not in original_fieldnames and field != 'name':
+                        if field not in original_fieldnames and field != 'google_place_name':
                             merged_row[field] = best_match[field]
                     
                     merged_count += 1
                 else:
                     # No match found, add empty values for enriched fields
                     for field in enriched_fieldnames:
-                        if field not in original_fieldnames and field != 'name':
+                        if field not in original_fieldnames and field != 'google_place_name':
                             merged_row[field] = ""
             
             # Write the merged row
@@ -395,11 +443,11 @@ if __name__ == "__main__":
     
     # Process in small batches with better rate limiting
     # Adjust these parameters based on API limits
-    process_establishments(batch_size=3, max_batches=100)
+    process_establishments(batch_size=5, max_batches=500)
     
     # Merge the original and enriched CSV files
     merge_csv_files(
         original_csv_path=input_csv_path,
         enriched_csv_path=output_csv_path,
-        merged_csv_path="/home/ubuntu/ramq_data/ramq_establishments_merged_complete.csv"
+        merged_csv_path="data/ramq_establishments_merged_complete.csv"
     )
