@@ -6,11 +6,9 @@ import os
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
 
-# OpenAI API key
-os.environ["OPENAI_API_KEY"] = "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"
-
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# OpenAI API key should be set as an environment variable
+# Do not hardcode API keys in the code
+client = OpenAI()  # This will use the OPENAI_API_KEY environment variable
 
 # Input and output file paths
 INPUT_CSV_PATH = "/home/ubuntu/ramq_github/ramq-establishments-data/data/ramq_establishments_merged_improved.csv"
