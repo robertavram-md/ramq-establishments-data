@@ -5,15 +5,16 @@ import datetime
 import os
 import random
 import argparse
+import sys
 
 # Google Places API key
 API_KEY = "AIzaSyAo9nxP1rpIdP5UBPKftAxhjsiZCLGcdyM"
 
-# Input and output file paths (defaults)
-input_csv_path = "data/ramq_establishments_final.csv"
-output_csv_path = "data/ramq_establishments_enriched_complete.csv"
-temp_output_path = "data/ramq_establishments_enriched_temp.csv"
-progress_log_path = "data/enrichment_progress.log"
+# Input and output file paths
+input_csv_path = "data/ramq_establishments_to_enrich.csv"
+output_csv_path = "data/ramq_establishments_enriched_modified.csv"
+temp_output_path = "data/ramq_establishments_enriched_modified_temp.csv"
+progress_log_path = "data/enrichment_progress_modified.log"
 
 # Define the output CSV structure
 output_fieldnames = [
@@ -108,20 +109,17 @@ def get_place_details(place_id, max_retries=5):
             log_progress(f"Error getting place details: {str(e)}. Retrying in {wait_time:.2f} seconds ({retry_count}/{max_retries})")
             time.sleep(wait_time)
     
-    log_progress(f"Failed to get details after {max_retries} retries for place ID: {place_id}")
+    log_progress(f"Failed to get place details after {max_retries} retries for place ID: {place_id}")
     return None
 
 # Function to determine place type
 def determine_place_type(google_types, ramq_name):
-    # Check for hospital
-    if any(t in ["hospital", "health"] for t in google_types) or "HOPITAL" in ramq_name.upper():
+    if "hospital" in google_types:
         return "hospital"
-    # Check for clinic
-    elif any(t in ["doctor", "medical_clinic", "health"] for t in google_types) or any(term in ramq_name.upper() for term in ["CLINIQUE", "CLSC", "CENTRE", "MEDICAL"]):
-        return "clinic"
-    # Default to pharmacy
-    else:
+    elif "pharmacy" in google_types:
         return "pharmacy"
+    else:
+        return "hospital"  # Default to hospital
 
 # Function to extract address components
 def extract_address_components(components):
@@ -129,171 +127,136 @@ def extract_address_components(components):
         "locality": "",
         "country": "",
         "administrative_area_level_1": "",
-        "administrative_area_level_2": ""
+        "administrative_area_level_2": "",
+        "postal_code": ""
     }
     
     for component in components:
-        types = component.get("types", [])
-        
-        if "locality" in types:
-            result["locality"] = component.get("long_name", "")
-        elif "country" in types:
-            result["country"] = component.get("short_name", "")
-        elif "administrative_area_level_1" in types:
-            result["administrative_area_level_1"] = component.get("short_name", "")
-        elif "postal_code" in types:
-            result["administrative_area_level_2"] = component.get("long_name", "")
+        for type in component["types"]:
+            if type in result:
+                result[type] = component["long_name"]
+                break
     
     return result
 
 # Function to process a small batch of establishments
 def process_batch(establishments, start_idx, batch_size, current_timestamp):
-    batch_results = []
-    processed_count = 0
+    results = []
+    end_idx = min(start_idx + batch_size, len(establishments))
     
-    for i in range(start_idx, min(start_idx + batch_size, len(establishments))):
+    for i in range(start_idx, end_idx):
         establishment = establishments[i]
-        ramq_id = establishment['code']  # Get the RAMQ ID from 'code' field
-        name = establishment["name"]
-        address = establishment["address"]
-        region = establishment["region"]
         
-        if not address:
-            log_progress(f"Skipping {name} - No address available")
-            # Create empty row for establishments without address
-            output_row = {
-                "ramq_id": ramq_id,
-                "id": "",
-                "google_place_name": "",
-                "address": "",
-                "locality": "",
-                "country": "",
-                "administrative_area_level_1": "",
-                "administrative_area_level_2": "",
-                "international_phone_number": "",
-                "fax_number": "",
-                "type": "",
-                "website": "",
-                "latitude": "",
-                "longitude": "",
-                "added_time": current_timestamp,
-                "place_type": "",
-                "is_fax_enabled": "0"
-            }
-            batch_results.append(output_row)
-            log_progress(f"Added empty data for: {name} ({i+1}/{len(establishments)})")
+        ramq_id = establishment.get("code", "")
+        ramq_name = establishment.get("name", "")
+        ramq_address = establishment.get("address", "")
+        ramq_region = establishment.get("region", "")
+        
+        log_progress(f"Processing ({i+1}/{len(establishments)}): {ramq_id} - {ramq_name}")
+        
+        # Initialize output row with original data
+        output_row = {
+            "ramq_id": ramq_id,
+            "id": "",  # Will be filled with Google Place ID if found
+            "google_place_name": "",
+            "address": ramq_address,  # Default to original address
+            "locality": "",
+            "country": "",
+            "administrative_area_level_1": "",
+            "administrative_area_level_2": "",
+            "international_phone_number": "",
+            "fax_number": "",
+            "type": "",
+            "website": "",
+            "latitude": "",
+            "longitude": "",
+            "added_time": current_timestamp,
+            "place_type": "",
+            "is_fax_enabled": "0"  # Default value
+        }
+        
+        # Skip if missing essential data
+        if not ramq_name or not ramq_address:
+            log_progress(f"Skipping {ramq_id}: Missing name or address")
+            results.append(output_row)
             continue
         
-        # Search for place
-        place = search_place(name, address, region)
-        
-        if place and place.get("place_id"):
-            place_id = place.get("place_id")
-            details = get_place_details(place_id)
+        try:
+            # Step 1: Search for place
+            search_result = search_place(ramq_name, ramq_address, ramq_region)
+            if not search_result:
+                log_progress(f"No search results for {ramq_id}: {ramq_name}")
+                results.append(output_row)
+                continue
             
-            if details:
-                # Extract address components
-                address_components = extract_address_components(details.get("address_components", []))
+            # Step 2: Get place details
+            place_id = search_result.get("place_id")
+            if not place_id:
+                log_progress(f"No place ID for {ramq_id}: {ramq_name}")
+                results.append(output_row)
+                continue
                 
-                # Determine place type
-                place_type = determine_place_type(details.get("types", []), name)
+            place_details = get_place_details(place_id)
+            if not place_details:
+                log_progress(f"No place details for {ramq_id}: {ramq_name}")
+                # Still save the place ID
+                output_row["id"] = place_id
+                results.append(output_row)
+                continue
+            
+            # Step 3: Extract and map relevant data
+            output_row["id"] = place_id
+            output_row["google_place_name"] = place_details.get("name", "")
+            output_row["address"] = place_details.get("formatted_address", ramq_address)
+            
+            # Extract address components
+            if "address_components" in place_details:
+                address_components = extract_address_components(place_details["address_components"])
+                output_row["locality"] = address_components["locality"]
+                output_row["country"] = address_components["country"]
+                output_row["administrative_area_level_1"] = address_components["administrative_area_level_1"]
+                output_row["administrative_area_level_2"] = address_components["administrative_area_level_2"]
+            
+            # Phone number
+            output_row["international_phone_number"] = place_details.get("international_phone_number", "")
+            
+            # Types
+            if "types" in place_details:
+                output_row["type"] = ",".join(place_details["types"])
+                output_row["place_type"] = determine_place_type(place_details["types"], ramq_name)
                 
-                # Create output row
-                output_row = {
-                    "ramq_id": ramq_id,
-                    "id": place_id,
-                    "google_place_name": details.get('name', ''),
-                    "address": details.get("formatted_address", ""),
-                    "locality": address_components.get("locality", ""),
-                    "country": address_components.get("country", ""),
-                    "administrative_area_level_1": address_components.get("administrative_area_level_1", ""),
-                    "administrative_area_level_2": address_components.get("administrative_area_level_2", ""),
-                    "international_phone_number": details.get("international_phone_number", ""),
-                    "fax_number": "",
-                    "type": place_type,
-                    "website": details.get("website", ""),
-                    "latitude": details.get("geometry", {}).get("location", {}).get("lat", ""),
-                    "longitude": details.get("geometry", {}).get("location", {}).get("lng", ""),
-                    "added_time": current_timestamp,
-                    "place_type": place_type,
-                    "is_fax_enabled": "0"
-                }
-                batch_results.append(output_row)
-                log_progress(f"Successfully processed: {name} ({i+1}/{len(establishments)})")
-            else:
-                # Create empty row if no details found
-                output_row = {
-                    "ramq_id": ramq_id,
-                    "id": "",
-                    "google_place_name": "",
-                    "address": "",
-                    "locality": "",
-                    "country": "",
-                    "administrative_area_level_1": "",
-                    "administrative_area_level_2": "",
-                    "international_phone_number": "",
-                    "fax_number": "",
-                    "type": "",
-                    "website": "",
-                    "latitude": "",
-                    "longitude": "",
-                    "added_time": current_timestamp,
-                    "place_type": "",
-                    "is_fax_enabled": "0"
-                }
-                batch_results.append(output_row)
-                log_progress(f"No details found for: {name} ({i+1}/{len(establishments)})")
-        else:
-            # Create empty row if place not found
-            output_row = {
-                "ramq_id": ramq_id,
-                "id": "",
-                "google_place_name": "",
-                "address": "",
-                "locality": "",
-                "country": "",
-                "administrative_area_level_1": "",
-                "administrative_area_level_2": "",
-                "international_phone_number": "",
-                "fax_number": "",
-                "type": "",
-                "website": "",
-                "latitude": "",
-                "longitude": "",
-                "added_time": current_timestamp,
-                "place_type": "",
-                "is_fax_enabled": "0"
-            }
-            batch_results.append(output_row)
-            log_progress(f"Place not found for: {name} ({i+1}/{len(establishments)})")
+            # Website
+            output_row["website"] = place_details.get("website", "")
+            
+            # Coordinates
+            if "geometry" in place_details and "location" in place_details["geometry"]:
+                output_row["latitude"] = place_details["geometry"]["location"]["lat"]
+                output_row["longitude"] = place_details["geometry"]["location"]["lng"]
+            
+            log_progress(f"Successfully processed {ramq_id}: {ramq_name}")
+            
+        except Exception as e:
+            log_progress(f"Error processing {ramq_id}: {str(e)}")
         
-        # Add a variable delay to avoid hitting API rate limits
-        delay = random.uniform(1.0, 2.0)
-        time.sleep(delay)
+        # Add the result
+        results.append(output_row)
+        
+        # Small delay between each establishment in the batch for rate limiting
+        time.sleep(random.uniform(0.5, 1.5))
     
-    return batch_results
+    return results
 
 # Function to process establishments with resume capability
 def process_establishments(batch_size=3, max_batches=None, start_from=None):
-    # Get current timestamp
-    current_timestamp = int(datetime.datetime.now().timestamp())
+    # Get the current time for all records in this run
+    current_timestamp = int(time.time())
     
-    # Ensure data directory exists
-    os.makedirs(os.path.dirname(temp_output_path), exist_ok=True)
-    
-    # Initialize progress log
-    if not os.path.exists(progress_log_path):
-        with open(progress_log_path, 'w') as log_file:
-            log_file.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting enrichment process\n")
-    
-    # Read input CSV
+    # Read the input CSV
     try:
         with open(input_csv_path, 'r', encoding='utf-8') as infile:
             reader = csv.DictReader(infile)
             establishments = list(reader)
-    except FileNotFoundError:
-        log_progress(f"Error: Input file {input_csv_path} not found")
-        return
+            log_progress(f"Read {len(establishments)} establishments from {input_csv_path}")
     except Exception as e:
         log_progress(f"Error reading input file: {str(e)}")
         return
@@ -370,32 +333,85 @@ def process_establishments(batch_size=3, max_batches=None, start_from=None):
     except Exception as e:
         log_progress(f"Error during processing: {str(e)}")
 
+# Function to merge with existing enriched data
+def merge_with_complete_data():
+    enriched_complete_path = "data/ramq_establishments_enriched_complete_full.csv"
+    modified_enriched_path = output_csv_path
+    merged_output_path = "data/ramq_establishments_enriched_complete_merged.csv"
+    
+    # Read the modified enriched data
+    log_progress(f"Reading modified enriched data from {modified_enriched_path}")
+    modified_rows = {}
+    try:
+        with open(modified_enriched_path, 'r', encoding='utf-8') as modified_file:
+            reader = csv.DictReader(modified_file)
+            for row in reader:
+                ramq_id = row.get("ramq_id", "")
+                if ramq_id:
+                    modified_rows[ramq_id] = row
+        log_progress(f"Read {len(modified_rows)} modified enriched rows")
+    except Exception as e:
+        log_progress(f"Error reading modified enriched data: {str(e)}")
+        return
+    
+    # Read the complete enriched data
+    log_progress(f"Reading complete enriched data from {enriched_complete_path}")
+    complete_rows = []
+    complete_fieldnames = []
+    try:
+        with open(enriched_complete_path, 'r', encoding='utf-8') as complete_file:
+            reader = csv.DictReader(complete_file)
+            complete_fieldnames = reader.fieldnames
+            for row in reader:
+                ramq_id = row.get("ramq_id", "")
+                if ramq_id in modified_rows:
+                    # Replace with modified row
+                    complete_rows.append(modified_rows[ramq_id])
+                    # Mark as processed
+                    modified_rows.pop(ramq_id)
+                else:
+                    # Keep original row
+                    complete_rows.append(row)
+        log_progress(f"Read {len(complete_rows)} total rows from complete data")
+    except Exception as e:
+        log_progress(f"Error reading complete enriched data: {str(e)}")
+        return
+    
+    # Add any remaining modified rows (if they didn't exist in complete data)
+    for ramq_id, row in modified_rows.items():
+        complete_rows.append(row)
+        log_progress(f"Adding new modified row for RAMQ ID: {ramq_id}")
+    
+    # Sort by ramq_id
+    complete_rows.sort(key=lambda x: x.get("ramq_id", ""))
+    
+    # Write merged data
+    log_progress(f"Writing merged data to {merged_output_path}")
+    try:
+        with open(merged_output_path, 'w', newline='', encoding='utf-8') as merged_file:
+            writer = csv.DictWriter(merged_file, fieldnames=complete_fieldnames or output_fieldnames)
+            writer.writeheader()
+            for row in complete_rows:
+                writer.writerow(row)
+        log_progress(f"Successfully wrote {len(complete_rows)} merged rows to {merged_output_path}")
+    except Exception as e:
+        log_progress(f"Error writing merged data: {str(e)}")
+
 if __name__ == "__main__":
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Enrich RAMQ establishments with Google Places data')
     parser.add_argument('--start-from', type=int, help='Index to start processing from', default=0)
-    parser.add_argument('--input-file', type=str, help='Input CSV file path', default=input_csv_path)
-    parser.add_argument('--output-file', type=str, help='Output CSV file path', default=output_csv_path)
-    parser.add_argument('--temp-file', type=str, help='Temporary output file path')
+    parser.add_argument('--merge', action='store_true', help='Merge with complete data after processing')
     args = parser.parse_args()
     
-    # Update file paths if provided
-    input_csv_path = args.input_file
-    output_csv_path = args.output_file
-    
-    # If temp file not specified, create one based on output file
-    if args.temp_file:
-        temp_output_path = args.temp_file
-    else:
-        # Create temp file path by adding _temp before the extension
-        base, ext = os.path.splitext(output_csv_path)
-        temp_output_path = f"{base}_temp{ext}"
-    
     # Process establishments with improved rate limiting
-    log_progress(f"Starting to enrich RAMQ establishments with Google Places data...")
-    log_progress(f"Using input file: {input_csv_path}")
-    log_progress(f"Output will be saved to: {output_csv_path}")
+    log_progress("Starting to enrich modified RAMQ establishments with Google Places data...")
     
     # Process in small batches with better rate limiting
     # Adjust these parameters based on API limits
-    process_establishments(batch_size=10, max_batches=500, start_from=args.start_from)
+    process_establishments(batch_size=10, max_batches=None, start_from=args.start_from)
+    
+    # Merge with complete data if requested
+    if args.merge:
+        log_progress("Merging modified data with complete data...")
+        merge_with_complete_data()
