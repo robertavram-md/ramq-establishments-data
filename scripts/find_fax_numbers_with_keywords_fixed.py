@@ -329,127 +329,96 @@ def search_establishment_fax(name: str, address: str, website: str = None, clien
         "raw_search_result": search_result if unique_fax_numbers else ""
     }
 
-def process_csv(input_path: str, output_path: str, limit: int = None, client: OpenAI = None):
+def standardize_fax_number(fax: str) -> str:
     """
-    Process the CSV file to find fax numbers for establishments.
+    Standardize fax number to format 1XXXYYYZZZZ
     
     Args:
-        input_path: Path to the input CSV file
-        output_path: Path to the output CSV file
-        limit: Maximum number of establishments to process (None for all)
+        fax: The fax number to standardize
+        
+    Returns:
+        Standardized fax number
+    """
+    # Remove all non-digit characters
+    digits = re.sub(r'[^\d]', '', fax)
+    
+    # Handle different formats
+    if len(digits) == 10:  # XXXYYYZZZZ
+        return f"1{digits}"
+    elif len(digits) == 11 and digits[0] == '1':  # 1XXXYYYZZZZ
+        return digits
+    elif len(digits) == 7:  # YYYZZZZ (assuming area code is 819)
+        return f"1819{digits}"
+    else:
+        return None  # Invalid format
+
+def process_csv(input_path: str, output_path: str, limit: int = None, client: OpenAI = None):
+    """
+    Process the CSV file to find fax numbers and their keywords.
+    
+    Args:
+        input_path: Path to input CSV file
+        output_path: Path to output CSV file
+        limit: Maximum number of rows to process (None for all)
         client: OpenAI client instance
     """
-    # Read the input CSV
-    with open(input_path, 'r', encoding='utf-8') as infile:
-        reader = csv.DictReader(infile)
-        data = list(reader)
-    
-    print(f"Total establishments in the input file: {len(data)}")
-    
-    # Initialize counters and result storage
-    processed_count = 0
-    establishments_with_fax = 0
-    total_fax_numbers = 0
-    
-    # Check if output file exists and get existing processed establishments
-    processed_ids = set()
+    # Read existing codes from the output file if it exists
+    existing_codes = set()
     if os.path.exists(output_path):
-        try:
-            with open(output_path, 'r', encoding='utf-8') as existing_file:
-                existing_reader = csv.DictReader(existing_file)
-                existing_data = list(existing_reader)
-                
-                # Store already processed establishment IDs
-                for row in existing_data:
-                    if row.get('code') or row.get('ramq_id'):
-                        processed_ids.add(row.get('code', '') + row.get('ramq_id', ''))
-                
-                print(f"Found {len(processed_ids)} already processed establishments in output file.")
-        except Exception as e:
-            print(f"Error reading existing output file: {e}")
-            existing_data = []
-    else:
-        existing_data = []
+        with open(output_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            existing_codes = {row['code'] for row in reader}
     
-    # Process establishments
-    for establishment in data:
-        establishment_id = establishment.get('code', '') + establishment.get('ramq_id', '')
+    # Open input and output files
+    with open(input_path, 'r', newline='', encoding='utf-8') as infile, \
+         open(output_path, 'a', newline='', encoding='utf-8') as outfile:
         
-        # Skip already processed establishments
-        if establishment_id in processed_ids:
-            print(f"Skipping already processed establishment: {establishment.get('name')}")
-            continue
+        reader = csv.DictReader(infile)
+        fieldnames = reader.fieldnames + ['fax_numbers', 'fax_keywords']
         
-        # Apply limit if specified
-        if limit is not None and processed_count >= limit:
-            print(f"Reached limit of {limit} establishments. Stopping.")
-            break
-        
-        processed_count += 1
-        
-        print(f"\nProcessing establishment {processed_count}/{limit if limit else len(data)}: {establishment.get('name', 'Unknown')}")
-        
-        # Search for fax numbers
-        fax_result = search_establishment_fax(
-            establishment['name'],
-            establishment['address'],
-            establishment.get('website'),
-            client
-        )
-        
-        fax_numbers = fax_result["fax_numbers"]
-        fax_keywords = fax_result["fax_keywords"]
-        search_result = fax_result.get("raw_search_result", "")
-        
-        # Add fax numbers to the establishment data
-        if fax_numbers:
-            establishments_with_fax += 1
-            total_fax_numbers += len(fax_numbers)
-            
-            # Format fax numbers and keywords for output
-            establishment['fax_numbers'] = json.dumps(fax_numbers)
-            establishment['fax_keywords'] = json.dumps(fax_keywords)
-            establishment['raw_search_result'] = search_result[:1000] if search_result else ""  # Limit length
-            
-            print(f"Found {len(fax_numbers)} fax numbers: {', '.join(fax_numbers)}")
-        else:
-            establishment['fax_numbers'] = "[]"
-            establishment['fax_keywords'] = "{}"
-            establishment['raw_search_result'] = ""
-            
-            print("No fax numbers found")
-        
-        # Write to output file
-        write_mode = 'a' if os.path.exists(output_path) else 'w'
-        with open(output_path, write_mode, encoding='utf-8', newline='') as outfile:
-            # Get all fieldnames (original + new ones)
-            fieldnames = list(reader.fieldnames) + ['fax_numbers', 'fax_keywords']
-            
-            # Remove duplicates while preserving order
-            seen = set()
-            fieldnames = [x for x in fieldnames if not (x in seen or seen.add(x))]
-            
+        # Write header if file is new
+        if not existing_codes:
             writer = csv.DictWriter(outfile, fieldnames=fieldnames)
-            
-            # Write header if file is new
-            if write_mode == 'w':
-                writer.writeheader()
-            
-            # Remove the 'raw_search_result' key before writing
-            establishment.pop('raw_search_result', None)
-            writer.writerow(establishment)
+            writer.writeheader()
+        else:
+            writer = csv.DictWriter(outfile, fieldnames=fieldnames)
         
-        # Add to processed IDs
-        processed_ids.add(establishment_id)
-        
-        # Sleep to avoid rate limiting
-        time.sleep(3)
-    
-    return {
-        "processed_count": processed_count,
-        "establishments_with_fax": establishments_with_fax,
-        "total_fax_numbers": total_fax_numbers
-    }
+        # Process each row
+        for i, row in enumerate(reader):
+            if limit and i >= limit:
+                break
+                
+            # Skip if code already exists
+            if row['code'] in existing_codes:
+                print(f"Skipping row with code {row['code']} as it already exists")
+                continue
+                
+            print(f"Processing row {i+1}: {row['name']}")
+            
+            # Search for fax numbers
+            result = search_establishment_fax(
+                row['name'],
+                row['address'],
+                row.get('website'),
+                client
+            )
+            
+            # Standardize fax numbers
+            standardized_fax_numbers = []
+            for fax in result['fax_numbers']:
+                standardized = standardize_fax_number(fax)
+                if standardized:
+                    standardized_fax_numbers.append(standardized)
+            
+            # Update row with standardized fax numbers and keywords
+            row['fax_numbers'] = json.dumps(standardized_fax_numbers)
+            row['fax_keywords'] = json.dumps(result['fax_keywords'])
+            
+            # Write the row
+            writer.writerow(row)
+            
+            # Add a small delay to avoid rate limiting
+            time.sleep(1)
 
 if __name__ == "__main__":
     # Set up argument parser
@@ -457,7 +426,7 @@ if __name__ == "__main__":
     parser.add_argument('--api-key', type=str, help='OpenAI API key')
     parser.add_argument('--input', type=str, help='Input CSV file path', default=INPUT_CSV_PATH)
     parser.add_argument('--output', type=str, help='Output CSV file path', default=OUTPUT_CSV_PATH)
-    parser.add_argument('--limit', type=int, help='Maximum number of establishments to process', default=10)
+    parser.add_argument('--limit', type=int, help='Maximum number of rows to process', default=10)
     args = parser.parse_args()
     
     # Use API key from arguments or from environment
@@ -471,9 +440,8 @@ if __name__ == "__main__":
     print("Starting to search for fax numbers with keywords using OpenAI API with gpt-4.1 and web_search_preview...")
     print(f"Input file: {args.input}")
     print(f"Output file: {args.output}")
-    print(f"Processing limit: {args.limit if args.limit else 'All establishments'}")
+    print(f"Processing limit: {args.limit if args.limit else 'All rows'}")
     
-    # Set limit to None to process all establishments, or a number to process a subset
-    results = process_csv(args.input, args.output, limit=args.limit, client=client)
+    # Set limit to None to process all rows, or a number to process a subset
+    process_csv(args.input, args.output, limit=args.limit, client=client)
     print(f"Processing complete. Results saved to {args.output}")
-    print(f"Found {results['total_fax_numbers']} fax numbers across {results['establishments_with_fax']} establishments.")

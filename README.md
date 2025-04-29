@@ -73,25 +73,28 @@ This will create `ramq_establishments_merged_complete.csv` that combines all dat
 
 ## Data Fields in Final CSV
 
-- **region**: Geographic region in Quebec
+The final merged CSV file (`ramq_establishments_merged_final.csv`) contains the following columns:
+
+- **region**: Geographic region in Quebec (e.g., "Gaspesie Iles De La Madeleine")
 - **code**: RAMQ 5-digit establishment code
-- **name**: Establishment name
-- **address**: Physical address
+- **name**: Official establishment name
+- **address**: Complete physical address including street, city, province, and postal code
 - **categories**: Categories of care units (comma-separated)
 - **id**: Google Place ID
-- **locality**: City/town
-- **country**: Country code
-- **administrative_area_level_1**: Province/state
+- **formatted_name**: Google Places formatted name of the establishment
+- **locality**: City/town where the establishment is located
+- **country**: Country code (CA for Canada)
+- **administrative_area_level_1**: Province/state (QC for Quebec)
 - **administrative_area_level_2**: Postal code
-- **international_phone_number**: Phone number
-- **fax_number**: Fax number
+- **international_phone_number**: Phone number in international format
+- **fax_number**: Fax number (if available)
 - **type**: Establishment type (hospital, clinic, pharmacy)
-- **website**: Website URL
-- **latitude**: Geographic latitude
-- **longitude**: Geographic longitude
-- **added_time**: Timestamp
-- **place_type**: Google place type
-- **is_fax_enabled**: Whether fax is available (1) or not (0)
+- **website**: Official website URL (if available)
+- **latitude**: Geographic latitude coordinate
+- **longitude**: Geographic longitude coordinate
+- **added_time**: Timestamp when the data was added
+- **place_type**: Google place type classification
+
 
 ## Requirements
 
