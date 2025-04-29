@@ -73,7 +73,7 @@ This will create `ramq_establishments_merged_complete.csv` that combines all dat
 
 ## Data Fields in Final CSV
 
-The final merged CSV file (`ramq_establishments_merged_final.csv`) contains the following columns:
+The final merged CSV file (`ramq_establishments_merged_final.csv`) and enriched file (`ramq_establishments_final_with_keywords.csv`) contain the following columns:
 
 - **region**: Geographic region in Quebec (e.g., "Gaspesie Iles De La Madeleine")
 - **code**: RAMQ 5-digit establishment code
@@ -87,14 +87,27 @@ The final merged CSV file (`ramq_establishments_merged_final.csv`) contains the 
 - **administrative_area_level_1**: Province/state (QC for Quebec)
 - **administrative_area_level_2**: Postal code
 - **international_phone_number**: Phone number in international format
-- **fax_number**: Fax number (if available)
+- **fax_number**: Legacy fax number field (if available)
 - **type**: Establishment type (hospital, clinic, pharmacy)
 - **website**: Official website URL (if available)
 - **latitude**: Geographic latitude coordinate
 - **longitude**: Geographic longitude coordinate
 - **added_time**: Timestamp when the data was added
 - **place_type**: Google place type classification
+- **is_fax_enabled**: Binary flag indicating whether fax is available (1) or not (0)
 
+Additional fields in `ramq_establishments_final_with_keywords.csv`:
+
+- **fax_numbers**: JSON array of standardized fax numbers in format "1XXXYYYZZZZ" (e.g., "18197574330")
+- **fax_keywords**: JSON object mapping fax numbers to their purposes (e.g., {"18197574330": "admin"})
+  Common purposes include:
+  - general inquiries
+  - appointments
+  - referrals
+  - medical records
+  - patient care
+  - admin
+  - billing
 
 ## Requirements
 
