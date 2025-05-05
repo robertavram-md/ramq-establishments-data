@@ -365,60 +365,144 @@ def process_csv(input_path: str, output_path: str, limit: int = None, client: Op
     # Read existing codes from the output file if it exists
     existing_codes = set()
     if os.path.exists(output_path):
-        with open(output_path, 'r', newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            existing_codes = {row['code'] for row in reader}
-    
-    # Open input and output files
-    with open(input_path, 'r', newline='', encoding='utf-8') as infile, \
-         open(output_path, 'a', newline='', encoding='utf-8') as outfile:
-        
-        reader = csv.DictReader(infile)
-        fieldnames = reader.fieldnames + ['fax_numbers', 'fax_keywords']
-        
-        # Write header if file is new
-        if not existing_codes:
-            writer = csv.DictWriter(outfile, fieldnames=fieldnames)
-            writer.writeheader()
-        else:
-            writer = csv.DictWriter(outfile, fieldnames=fieldnames)
-        
-        # Process each row
-        for i, row in enumerate(reader):
-            if limit and i >= limit:
-                break
+        try:
+            with open(output_path, 'r', newline='', encoding='utf-8') as f:
+                # Handle potential empty file or file with only header
+                try:
+                    reader = csv.DictReader(f)
+                    if reader.fieldnames: # Check if header exists
+                        existing_codes = {row['code'] for row in reader if 'code' in row}
+                    else:
+                        print(f"Warning: Output file '{output_path}' exists but has no header. Treating as empty.")
+                except (EOFError, csv.Error) as e:
+                     print(f"Warning: Could not read existing codes from '{output_path}'. Error: {e}. Treating as empty.")
+        except Exception as e:
+            print(f"Warning: Error opening existing output file '{output_path}': {e}. Proceeding as if it's empty.")
+
+    # --- Get total rows for progress calculation ---
+    total_rows = 0
+    try:
+        with open(input_path, 'r', newline='', encoding='utf-8') as f_count:
+             # Count rows more robustly
+             reader_count = csv.reader(f_count)
+             header = next(reader_count, None) # Skip header
+             if header:
+                  total_rows = sum(1 for row in reader_count)
+             else:
+                  print(f"Warning: Input file '{input_path}' seems empty or has no header.")
+        print(f"Total data rows to check in '{input_path}': {total_rows}")
+    except FileNotFoundError:
+         print(f"Error: Input file '{input_path}' not found for counting rows.")
+         return
+    except Exception as e:
+         print(f"Error reading input file '{input_path}' for counting rows: {e}")
+         return
+
+    if total_rows == 0:
+        print("No rows found in input file. Exiting.")
+        return
+
+    # Calculate progress checkpoints (every 10%)
+    checkpoints = {int(total_rows * p / 100.0) for p in range(10, 101, 10)}
+    reported_checkpoints = set()
+
+    # --- Process CSV --- 
+    rows_processed_count = 0
+    rows_skipped_count = 0
+
+    try:
+        with open(input_path, 'r', newline='', encoding='utf-8') as infile, \
+             open(output_path, 'a', newline='', encoding='utf-8') as outfile:
+            
+            reader = csv.DictReader(infile)
+            if not reader.fieldnames:
+                 print(f"Error: Could not read header from '{input_path}'. Exiting.")
+                 return
+                 
+            # Define fieldnames including the new ones
+            # Ensure new fields are added correctly even if output file was empty/new
+            output_fieldnames = list(reader.fieldnames)
+            if 'fax_numbers' not in output_fieldnames: output_fieldnames.append('fax_numbers')
+            if 'fax_keywords' not in output_fieldnames: output_fieldnames.append('fax_keywords')
+            
+            writer = csv.DictWriter(outfile, fieldnames=output_fieldnames)
+            
+            # Write header only if the file is newly created or was empty (existing_codes is empty implies this)
+            file_is_new_or_empty = not existing_codes and os.path.getsize(output_path) == 0
+            if file_is_new_or_empty:
+                print(f"Writing header to new file: {output_path}")
+                writer.writeheader()
+            
+            # Process each row
+            for i, row in enumerate(reader):
+                current_row_index = i + 1 # 1-based index for reporting
+                if limit and rows_processed_count >= limit:
+                    print(f"Reached processing limit of {limit} rows.")
+                    break
+                    
+                # Skip if code already exists
+                if row.get('code') in existing_codes:
+                    # print(f"Skipping row {current_row_index} with code {row.get('code')} as it already exists")
+                    rows_skipped_count += 1
+                    continue
+                    
+                print(f"\nProcessing row {current_row_index} (Actual processed: {rows_processed_count + 1}): {row.get('name', 'N/A')}")
                 
-            # Skip if code already exists
-            if row['code'] in existing_codes:
-                print(f"Skipping row with code {row['code']} as it already exists")
-                continue
+                # --- Search and Standardize --- 
+                try:
+                    result = search_establishment_fax(
+                        row.get('name', ''),
+                        row.get('address', ''),
+                        row.get('website'),
+                        client
+                    )
+                    
+                    standardized_fax_numbers = []
+                    standardized_keywords = {}
+
+                    if result.get('fax_numbers'):
+                        for fax in result['fax_numbers']:
+                            standardized = standardize_fax_number(fax)
+                            if standardized:
+                                standardized_fax_numbers.append(standardized)
+                                # Map keywords using the *standardized* number
+                                original_keyword = result['fax_keywords'].get(fax, "general") # Get keyword for original fax format
+                                standardized_keywords[standardized] = original_keyword # Store with standardized key
+                    
+                    # Prepare row for writing (ensure all expected fields are present)
+                    output_row = {fieldname: row.get(fieldname) for fieldname in reader.fieldnames}
+                    output_row['fax_numbers'] = json.dumps(standardized_fax_numbers)
+                    output_row['fax_keywords'] = json.dumps(standardized_keywords)
+                    
+                    # Write the row
+                    writer.writerow(output_row)
+                    rows_processed_count += 1
+
+                except Exception as e_inner:
+                     print(f"Error processing data for row {current_row_index} ({row.get('name', 'N/A')}): {e_inner}")
+                     # Optionally write row with empty fax data or skip
+                     # Skipping for now to avoid partial data
+
+                # --- Progress Reporting --- 
+                if total_rows > 0:
+                     progress_percent = int((current_row_index / total_rows) * 100)
+                     # Check if we crossed a 10% checkpoint that hasn't been reported
+                     for p_checkpoint in range(10, 101, 10):
+                          row_checkpoint = int(total_rows * p_checkpoint / 100.0)
+                          if current_row_index >= row_checkpoint and p_checkpoint not in reported_checkpoints:
+                               print(f"\n--- Progress: Approx. {p_checkpoint}% complete (Checked row {current_row_index}/{total_rows}). Output file up-to-date. ---")
+                               reported_checkpoints.add(p_checkpoint)
+                               break # Report only the first checkpoint crossed
+
+                # Add a small delay to avoid rate limiting
+                time.sleep(1)
                 
-            print(f"Processing row {i+1}: {row['name']}")
-            
-            # Search for fax numbers
-            result = search_establishment_fax(
-                row['name'],
-                row['address'],
-                row.get('website'),
-                client
-            )
-            
-            # Standardize fax numbers
-            standardized_fax_numbers = []
-            for fax in result['fax_numbers']:
-                standardized = standardize_fax_number(fax)
-                if standardized:
-                    standardized_fax_numbers.append(standardized)
-            
-            # Update row with standardized fax numbers and keywords
-            row['fax_numbers'] = json.dumps(standardized_fax_numbers)
-            row['fax_keywords'] = json.dumps(result['fax_keywords'])
-            
-            # Write the row
-            writer.writerow(row)
-            
-            # Add a small delay to avoid rate limiting
-            time.sleep(1)
+    except FileNotFoundError:
+         print(f"Error: Input file '{input_path}' not found during processing.")
+    except Exception as e:
+         print(f"An unexpected error occurred during CSV processing: {e}")
+    finally:
+         print(f"\nFinished processing loop. Total rows checked: {current_row_index}. Rows actually processed and added: {rows_processed_count}. Rows skipped: {rows_skipped_count}.")
 
 if __name__ == "__main__":
     # Set up argument parser
@@ -440,8 +524,11 @@ if __name__ == "__main__":
     print("Starting to search for fax numbers with keywords using OpenAI API with gpt-4.1 and web_search_preview...")
     print(f"Input file: {args.input}")
     print(f"Output file: {args.output}")
-    print(f"Processing limit: {args.limit if args.limit else 'All rows'}")
     
-    # Set limit to None to process all rows, or a number to process a subset
-    process_csv(args.input, args.output, limit=args.limit, client=client)
+    # Set limit to None if user provides 0 or negative, to process all rows
+    effective_limit = args.limit if args.limit and args.limit > 0 else None
+    
+    print(f"Processing limit: {effective_limit if effective_limit else 'All remaining rows'}")
+    
+    process_csv(args.input, args.output, limit=effective_limit, client=client)
     print(f"Processing complete. Results saved to {args.output}")
